@@ -1,0 +1,16 @@
+[
+  {
+    "id": "quran_1_1",
+    "text": "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
+    "translation": "In the name of Allah, the Most Gracious, the Most Merciful.",
+    "source": "Quran",
+    "reference": "Surah Al-Fatiha, Ayah 1"
+  },
+  {
+    "id": "hadith_1",
+    "text": "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ",
+    "translation": "Actions are judged by intentions.",
+    "source": "Hadith",
+    "reference": "Sahih Bukhari 1"
+  }
+]
