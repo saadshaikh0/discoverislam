@@ -1,6 +1,7 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 import json
 import re
+import os
 
 # Load Mistral-7B-Instruct-v0.3 model and tokenizer
 model_name = "mistralai/Mistral-7B-Instruct-v0.3"
@@ -16,67 +17,152 @@ def remove_html_tags(text):
     clean = re.compile('<.*?>')
     return re.sub(clean, '', text)
 
-# Load the Tafsir JSON file
-with open("tafsir_data.json", "r", encoding="utf-8") as file:
-    tafsir_data = json.load(file)
-
-# Select the first tafsir entry for testing
-test_tafsir = tafsir_data[25]
-
-# Clean tafsir text
-cleaned_text = remove_html_tags(test_tafsir["tafsir_text"])
-
-# Truncate text if it exceeds max_length
-max_length = 5000
-encoded_text = tokenizer.encode(cleaned_text, truncation=True, max_length=max_length, return_tensors="pt")
-truncated_text = tokenizer.decode(encoded_text[0], skip_special_tokens=True)
-
 # Function to generate question-answer pairs
 def generate_qa(text):
-    prompt = f"Generate three question-answer pairs based on the following Islamic tafsir:\n\n{text}\n\nQuestions and Answers:"
+    prompt = f"Generate three question-answer pairs based on the following Islamic text:\n\n{text}\n\nQuestions and Answers:"
     response = qa_pipeline(prompt, max_new_tokens=1024, do_sample=True, temperature=0.7)
     return response[0]["generated_text"]
 
-# Generate QA pairs
-qa_pairs = generate_qa(truncated_text)
+# Function to format QA output
+def process_qa_output(qa_pairs):
+    qa_list = qa_pairs.split("\n")
+    formatted_qa = []
+    current_question = None
+    current_answer = ""
 
-# Reformat QA pairs to ensure proper structure
-qa_list = qa_pairs.split("\n")
-formatted_qa = []
-current_question = None
-current_answer = ""
+    for line in qa_list:
+        line = line.strip()
+        if not line or line.lower() in ["questions and answers:", ""]:
+            continue
+        if line.lower().startswith("question:") or re.match(r"^\d+\. ", line):
+            if current_question and current_answer:
+                formatted_qa.append({"instruction": current_question, "output": current_answer.strip()})
+            current_question = re.sub(r"^\d+\.\s?", "", line.replace("Question:", "").strip())
+            current_answer = ""
+        elif line.lower().startswith("answer:"):
+            current_answer = line.replace("Answer:", "").strip()
+        elif current_question and current_answer:
+            current_answer += " " + line
 
-for line in qa_list:
-    line = line.strip()
+    if current_question and current_answer:
+        formatted_qa.append({"instruction": current_question, "output": current_answer.strip()})
 
-    # Skip empty lines and irrelevant headers
-    if not line or line.lower() in ["questions and answers:", ""]:
-        continue
+    return formatted_qa
+
+# Function to save progress
+def save_progress(data, filename):
+    with open(filename, "w", encoding="utf-8") as outfile:
+        json.dump(data, outfile, indent=4, ensure_ascii=False)
+
+# -------------------- 1. Generate QA from Tafsir --------------------
+def generate_qa_from_tafsir():
+    input_file = "tafsir_data.json"
+    output_file = "tafsir_instruction_test.json"
+
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as outfile:
+            try:
+                formatted_qa = json.load(outfile)
+            except json.JSONDecodeError:
+                formatted_qa = []
+    else:
+        formatted_qa = []
+
+    with open(input_file, "r", encoding="utf-8") as file:
+        tafsir_data = json.load(file)
+
+    batch_size = 100
+    for idx, tafsir_entry in enumerate(tafsir_data):
+        cleaned_text = remove_html_tags(tafsir_entry["tafsir_text"])
+        max_length = 5000
+        encoded_text = tokenizer.encode(cleaned_text, truncation=True, max_length=max_length, return_tensors="pt")
+        truncated_text = tokenizer.decode(encoded_text[0], skip_special_tokens=True)
+
+        qa_pairs = generate_qa(truncated_text)
+        formatted_qa.extend(process_qa_output(qa_pairs))
+
+        if (idx + 1) % batch_size == 0:
+            save_progress(formatted_qa, output_file)
+            print(f"Saved progress at Tafsir entry {idx + 1}")
+
+    save_progress(formatted_qa, output_file)
+    print("Tafsir QA generation completed.")
+
+# -------------------- 2. Generate QA from Hadith --------------------
+def generate_qa_from_hadith():
+    input_file = "sahih_bukhari_hadith.json"
+    output_file = "hadith_instruction_test.json"
+
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as outfile:
+            try:
+                formatted_qa = json.load(outfile)
+            except json.JSONDecodeError:
+                formatted_qa = []
+    else:
+        formatted_qa = []
+
+    with open(input_file, "r", encoding="utf-8") as file:
+        hadith_data = json.load(file)
+
+    batch_size = 10
+    for idx, hadith in enumerate(hadith_data):
+        text = f"{hadith['Narrator']} said: {hadith['English Text']}"
+        qa_pairs = generate_qa(text)
+        formatted_qa.extend(process_qa_output(qa_pairs))
+
+        if (idx + 1) % batch_size == 0:
+            save_progress(formatted_qa, output_file)
+            print(f"Saved progress at Hadith entry {idx + 1}")
+
+    save_progress(formatted_qa, output_file)
+    print("Hadith QA generation completed.")
+
+# -------------------- 3. Generate QA from Quran --------------------
+def generate_qa_from_quran():
+    input_file = "quran_data.json"
+    output_file = "quran_instruction_test.json"
+
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as outfile:
+            try:
+                formatted_qa = json.load(outfile)
+            except json.JSONDecodeError:
+                formatted_qa = []
+    else:
+        formatted_qa = []
+
+    with open(input_file, "r", encoding="utf-8") as file:
+        quran_data = json.load(file)
+
+    batch_size = 100
+    merged_verses = {}
     
-    # Detect questions
-    if line.lower().startswith("question:") or re.match(r"^\d+\.", line):
-        # Save previous QA pair before starting a new one
-        if current_question and current_answer:
-            formatted_qa.append({"instruction": current_question, "output": current_answer.strip()})
-        
-        # Extract the question (handling cases with numbering like '1. Question: ...')
-        current_question = re.sub(r"^\d+\.\s?", "", line.replace("Question:", "").strip())
-        current_answer = ""  # Reset answer
+    # Merge 5-10 consecutive verses from the same chapter
+    for verse in quran_data:
+        chapter_id = verse["chapter_id"]
+        if chapter_id not in merged_verses:
+            merged_verses[chapter_id] = []
+        merged_verses[chapter_id].append(verse["translation"])
     
-    # Detect answers
-    elif line.lower().startswith("answer:"):
-        current_answer = line.replace("Answer:", "").strip()
-    
-    # Handle multi-line answers (if the next line is not a new question)
-    elif current_question and current_answer:
-        current_answer += " " + line  # Append to the existing answer
+    merged_texts = []
+    for chapter_id, verses in merged_verses.items():
+        for i in range(0, len(verses), 10):  # Merge 5-10 verses at a time
+            merged_texts.append(" ".join(verses[i:i+10]))
 
-# Add last QA pair
-if current_question and current_answer:
-    formatted_qa.append({"instruction": current_question, "output": current_answer.strip()})
+    for idx, merged_text in enumerate(merged_texts):
+        qa_pairs = generate_qa(merged_text)
+        formatted_qa.extend(process_qa_output(qa_pairs))
 
-# Save the result in a JSON file
-with open("tafsir_instruction_test.json", "w", encoding="utf-8") as outfile:
-    json.dump(formatted_qa, outfile, indent=4, ensure_ascii=False)
+        if (idx + 1) % batch_size == 0:
+            save_progress(formatted_qa, output_file)
+            print(f"Saved progress at Quran entry {idx + 1}")
 
-print("Tafsir question-answer pairs for one entry have been successfully saved.")
+    save_progress(formatted_qa, output_file)
+    print("Quran QA generation completed.")
+
+# -------------------- RUN FUNCTIONS --------------------
+if __name__ == "__main__":
+    # generate_qa_from_tafsir()
+    # generate_qa_from_hadith()
+    generate_qa_from_quran()

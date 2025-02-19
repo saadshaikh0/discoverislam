@@ -2,3 +2,4 @@ quran_deepseek_llm/bukhari_hadith_embeddings.json
 bukhari_hadith_embeddings.json
 .env
 __pycache__
+backup
