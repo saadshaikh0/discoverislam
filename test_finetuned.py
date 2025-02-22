@@ -7,7 +7,7 @@ base_model_name = "Qwen/Qwen2.5-3B-Instruct"  # Change if using a different base
 fine_tuned_model_path = "./fine_tuned_deepseek"  # Change path if needed
 
 # ✅ Load Tokenizer
-tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(fine_tuned_model_path, trust_remote_code=True)
 
 # ✅ Ensure Proper Tokenization
 tokenizer.pad_token = tokenizer.eos_token
@@ -30,14 +30,16 @@ base_model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 
-# ✅ Load Fine-Tuned Model
+# ✅ Load Fine-Tuned Model & Merge LoRA Adapter
 fine_tuned_model = AutoModelForCausalLM.from_pretrained(
     fine_tuned_model_path,
     quantization_config=bnb_config,
     device_map="cuda",
     trust_remote_code=True
 )
-fine_tuned_model = PeftModel.from_pretrained(fine_tuned_model, fine_tuned_model_path)  # Load LoRA adapter
+fine_tuned_model = PeftModel.from_pretrained(fine_tuned_model, fine_tuned_model_path)
+fine_tuned_model = fine_tuned_model.merge_and_unload()  # ✅ Merge LoRA weights before inference
+fine_tuned_model.eval()
 
 # ✅ Function to Generate Response
 def generate_response(model, user_input):

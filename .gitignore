@@ -3,3 +3,4 @@ bukhari_hadith_embeddings.json
 .env
 __pycache__
 backup
+logs
