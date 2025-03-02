@@ -89,9 +89,43 @@ def generate_qa_from_tafsir():
     print("Tafsir QA generation completed.")
 
 # -------------------- 2. Generate QA from Hadith --------------------
-def generate_qa_from_hadith():
-    input_file = "sahih_bukhari_hadith.json"
-    output_file = "hadith_instruction_test.json"
+def generate_qa_from_tafsir_maarif():
+    input_file = "tafsir_data_maarif-ul-quran.json"
+    output_file = "tafsir_maarif_instruction_test.json"
+
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as outfile:
+            try:
+                formatted_qa = json.load(outfile)
+            except json.JSONDecodeError:
+                formatted_qa = []
+    else:
+        formatted_qa = []
+
+    with open(input_file, "r", encoding="utf-8") as file:
+        tafsir_data = json.load(file)
+
+    batch_size = 10
+    for idx, tafsir_entry in enumerate(tafsir_data):
+        cleaned_text = remove_html_tags(tafsir_entry["tafsir_text"])
+        max_length = 5000
+        encoded_text = tokenizer.encode(cleaned_text, truncation=True, max_length=max_length, return_tensors="pt")
+        truncated_text = tokenizer.decode(encoded_text[0], skip_special_tokens=True)
+
+        qa_pairs = generate_qa(truncated_text)
+        formatted_qa.extend(process_qa_output(qa_pairs))
+
+        if (idx + 1) % batch_size == 0:
+            save_progress(formatted_qa, output_file)
+            print(f"Saved progress at Tafsir entry {idx + 1}")
+
+    save_progress(formatted_qa, output_file)
+    print("Tafsir QA generation completed.")
+
+
+def generate_qa_from_hadith_maarif():
+    input_file = "tafsir_data_maarif-ul-quran.json"
+    output_file = "maarif-ul-quran_instruction_test.json"
 
     if os.path.exists(output_file):
         with open(output_file, "r", encoding="utf-8") as outfile:
@@ -107,7 +141,7 @@ def generate_qa_from_hadith():
 
     batch_size = 10
     for idx, hadith in enumerate(hadith_data):
-        text = f"{hadith['Narrator']} said: {hadith['English Text']}"
+        text = f"{hadith['Narrator']} said: {hadith['tafsir_text']}"
         qa_pairs = generate_qa(text)
         formatted_qa.extend(process_qa_output(qa_pairs))
 
@@ -165,4 +199,5 @@ def generate_qa_from_quran():
 if __name__ == "__main__":
     # generate_qa_from_tafsir()
     # generate_qa_from_hadith()
-    generate_qa_from_quran()
+    # generate_qa_from_quran()
+    generate_qa_from_tafsir_maarif()
