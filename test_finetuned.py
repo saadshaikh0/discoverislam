@@ -4,7 +4,7 @@ from peft import PeftModel
 
 # ✅ Paths for Models
 base_model_name = "Qwen/Qwen2.5-3B-Instruct"  # Change if using a different base model
-fine_tuned_model_path = "./fine_tuned_deepseek"  # Change path if needed
+fine_tuned_model_path = "./fine_tuned_deepseek_maarif"  # Change path if needed
 
 # ✅ Load Tokenizer
 tokenizer = AutoTokenizer.from_pretrained(fine_tuned_model_path, trust_remote_code=True)

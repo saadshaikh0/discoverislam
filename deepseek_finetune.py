@@ -6,10 +6,14 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
-    DataCollatorForLanguageModeling,
     Trainer
 )
-from peft import get_peft_model, LoraConfig, TaskType
+from peft import (
+    get_peft_model,
+    LoraConfig,
+    TaskType,
+    prepare_model_for_kbit_training
+)
 
 model_name = "Qwen/Qwen2.5-3B-Instruct"
 
@@ -28,26 +32,36 @@ bnb_config = {
     "bnb_4bit_compute_dtype": torch.bfloat16,
 }
 
+print("Loading model in 4-bit...")
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map="auto",
-    max_memory={0: "7GB"},
     quantization_config=bnb_config,
-    trust_remote_code=True,
-    low_cpu_mem_usage=True
+    trust_remote_code=True
 )
 
-# OPTIONAL: For lower VRAM usage
-# model.config.use_cache = False
-# model.gradient_checkpointing_enable()
+# Important: Prepare for k-bit training
+model = prepare_model_for_kbit_training(model)
 
+# (Optional) Turn off cache if needed
+model.config.use_cache = False
+model.gradient_checkpointing_enable()
+
+# Check how attention modules are named
+# for name, param in model.named_parameters():
+#     print(name)
+#     break
+
+# Suppose QWen's attention submodules are named "q_proj", "k_proj", "v_proj", etc.
 peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     r=8,
     lora_alpha=16,
     lora_dropout=0.1,
-    target_modules=["q_proj", "k_proj", "v_proj"]
+    # Make sure these match actual submodule names in Qwen
+    target_modules=["q_proj", "k_proj", "v_proj"]  
 )
+
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
@@ -58,66 +72,58 @@ def load_qa_data(filenames):
             qa_data.extend(json.load(f))
     return qa_data
 
-qa_files = ["hadith_instruction_test.json", "tafsir_instruction_test.json","tafsir_maarif_instruction_test.json", "quran_instruction_test.json"]
-qa_dataset = load_qa_data(qa_files)
+task_files = [
+    "hadith_instruction_test.json",
+    "tafsir_instruction_test.json",
+    "tafsir_maarif_instruction_test.json",
+    "quran_instruction_test.json"
+]
+dataset = load_qa_data(task_files)
 
 def format_qa(example):
-    # You might want to incorporate any special Qwen instructions or style:
-    # https://github.com/QwenLM/Qwen-7B/blob/main/README.md
-    # or whatever prompt format is recommended
-    user_prompt = f"User: {example['instruction']}\nAI:"
-    answer = example["output"]
-    return {
-        "full_text": user_prompt + answer
-    }
+    messages = [
+        {"role": "user", "content": example['instruction']},
+        {"role": "assistant", "content": example['output']}
+    ]
+    formatted_input = tokenizer.apply_chat_template(messages, tokenize=False)
+    return {"full_text": formatted_input}
 
-hf_dataset = Dataset.from_list([format_qa(q) for q in qa_dataset])
+dataset_formatted = Dataset.from_list([format_qa(q) for q in dataset])
 
 def tokenize_function(examples):
-    # We only have "full_text" which is prompt+answer concatenated
-    # We'll pad/truncate to a max length, then *later* mask out prompt tokens.
-    tokens = tokenizer(
+    return tokenizer(
         examples["full_text"],
         padding="max_length",
         truncation=True,
         max_length=512
     )
-    return tokens
 
-tokenized_dataset = hf_dataset.map(tokenize_function, batched=True)
+tokenized_dataset = dataset_formatted.map(tokenize_function, batched=True)
 
-# If you want a data collator that automatically sets
-# 15% of tokens to masked or anything, use DataCollatorForLanguageModeling
-# but typically for SFT, we do a "prompt masking" approach, so you might
-# want a custom collator that sets the prompt portion to -100.
-# For simplicity, here's a custom one:
 def causal_lm_data_collator(features):
-    batch = {}
-    # Convert list of dicts => dict of lists => tensor
     input_ids = torch.tensor([f["input_ids"] for f in features], dtype=torch.long)
     attention_mask = torch.tensor([f["attention_mask"] for f in features], dtype=torch.long)
-
-    # By default, train on the entire sequence, but if you'd like to ignore
-    # the prompt portion, you can set it to -100. This requires you to know
-    # where prompt ends and answer begins. If your "prompt + answer" is all
-    # we have, we *might* guess a separator. This is a demonstration:
     labels = input_ids.clone()
-    # Example: find index of "AI:" or something similar. If you have a simpler
-    # known prompt length, you can do a direct slice. 
-    # (Leaving it naive here.)
-
-    batch["input_ids"] = input_ids
-    batch["labels"] = labels
-    batch["attention_mask"] = attention_mask
-    return batch
+    
+    for i in range(input_ids.shape[0]):
+        full_text = tokenizer.decode(input_ids[i], skip_special_tokens=True)
+        ai_index = full_text.find("<|im_start|>assistant")
+        if ai_index != -1:
+            tokens_until_ai = tokenizer(full_text[:ai_index], add_special_tokens=False)["input_ids"]
+            prompt_length = len(tokens_until_ai)
+            labels[i, :prompt_length] = -100
+        else:
+            labels[i, :] = -100
+    
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
 training_args = TrainingArguments(
-    output_dir="./fine_tuned_deepseek",
+    output_dir="./fine_tuned_qwen",
     per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
     save_total_limit=2,
     save_steps=500,
-    num_train_epochs=3,
+    num_train_epochs=1,
     learning_rate=2e-5,
     logging_dir="./logs",
     logging_steps=10,
@@ -125,15 +131,13 @@ training_args = TrainingArguments(
     optim="adamw_torch"
 )
 
-
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=tokenized_dataset,
-    tokenizer=tokenizer,
     data_collator=causal_lm_data_collator
 )
 
 trainer.train()
-model.save_pretrained("./fine_tuned_deepseek")
-print("✅ Fine-tuning complete. LoRA weights saved at './fine_tuned_deepseek'")
+model.save_pretrained("./fine_tuned_qwen")
+print("✅ Fine-tuning complete. LoRA weights saved at './fine_tuned_qwen'")
